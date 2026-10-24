@@ -1845,6 +1845,34 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     return (int)msg.wParam;
 }
 
+/* Without the C runtime, some gcc versions still emit calls to these; build.bat passes
+   -fno-tree-loop-distribute-patterns so the loops are not turned back into self-calls. */
+void *memmove(void *dst, const void *src, size_t n)
+{
+    unsigned char *d = dst;
+    const unsigned char *s = src;
+    if (d < s) {
+        while (n--) *d++ = *s++;
+    } else {
+        d += n;
+        s += n;
+        while (n--) *--d = *--s;
+    }
+    return dst;
+}
+
+void *memcpy(void *dst, const void *src, size_t n)
+{
+    return memmove(dst, src, n);
+}
+
+void *memset(void *dst, int c, size_t n)
+{
+    unsigned char *d = dst;
+    while (n--) *d++ = (unsigned char)c;
+    return dst;
+}
+
 /* Built without the C runtime so startup loads no CRT DLLs; this replaces its entry point. */
 void WINAPI Entry(void)
 {
