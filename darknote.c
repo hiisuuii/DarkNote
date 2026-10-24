@@ -144,6 +144,118 @@ static void DarkTitle(HWND h)
         DwmSetWindowAttribute(h, 19, &on, sizeof on);
 }
 
+static void PaintButton(HWND h, HDC dc)
+{
+    RECT rc, tr;
+    WCHAR text[128];
+    TEXTMETRICW tm;
+    int type = GetWindowLongW(h, GWL_STYLE) & BS_TYPEMASK;
+    int dpi = GetDpiForWindow(h);
+    LRESULT ui = SendMessageW(h, WM_QUERYUISTATE, 0, 0);
+    DWORD dt = DT_SINGLELINE | ((ui & UISF_HIDEACCEL) ? DT_HIDEPREFIX : 0);
+    GetClientRect(h, &rc);
+    GetWindowTextW(h, text, 128);
+    HGDIOBJ oldFont = SelectObject(dc, (HFONT)SendMessageW(h, WM_GETFONT, 0, 0));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, IsWindowEnabled(h) ? COL_TEXT : COL_DISABLED);
+    GetTextMetricsW(dc, &tm);
+
+    if (type == BS_GROUPBOX) {
+        /* No background fill: the group box overlaps the controls it contains. */
+        int pad = MulDiv(6, dpi, 96);
+        RECT frame = {rc.left, rc.top + tm.tmHeight / 2, rc.right, rc.bottom};
+        FrameRect(dc, &frame, g_brSep);
+        SetRect(&tr, rc.left + pad, rc.top, rc.right - pad, rc.top + tm.tmHeight);
+        DrawTextW(dc, text, -1, &tr, dt | DT_CALCRECT);
+        RECT gap = {tr.left - 2, tr.top, tr.right + 2, tr.bottom};
+        FillRect(dc, &gap, g_brDlg);
+        DrawTextW(dc, text, -1, &tr, dt);
+        SelectObject(dc, oldFont);
+        return;
+    }
+
+    FillRect(dc, &rc, g_brDlg);
+    UINT st = (UINT)SendMessageW(h, BM_GETSTATE, 0, 0);
+    int box = MulDiv(13, dpi, 96), top = (rc.top + rc.bottom - box) / 2;
+    RECT b = {rc.left, top, rc.left + box, top + box};
+    HPEN border = CreatePen(PS_SOLID, 1, IsWindowEnabled(h) ? RGB(150, 150, 150) : COL_SEP);
+    HGDIOBJ oldPen = SelectObject(dc, border);
+    HGDIOBJ oldBrush = SelectObject(dc, (st & BST_PUSHED) ? g_brHot : g_brInput);
+    BOOL radio = type == BS_RADIOBUTTON || type == BS_AUTORADIOBUTTON;
+    if (radio) {
+        Ellipse(dc, b.left, b.top, b.right, b.bottom);
+        if (st & BST_CHECKED) {
+            int in = box * 3 / 10;
+            SelectObject(dc, GetStockObject(WHITE_BRUSH));
+            SelectObject(dc, GetStockObject(WHITE_PEN));
+            Ellipse(dc, b.left + in, b.top + in, b.right - in, b.bottom - in);
+        }
+    } else {
+        Rectangle(dc, b.left, b.top, b.right, b.bottom);
+        if (st & BST_CHECKED) {
+            HPEN tick = CreatePen(PS_SOLID, MulDiv(2, dpi, 96), RGB(255, 255, 255));
+            POINT pts[3] = {{b.left + box * 22 / 100, b.top + box * 50 / 100},
+                            {b.left + box * 42 / 100, b.top + box * 70 / 100},
+                            {b.left + box * 78 / 100, b.top + box * 28 / 100}};
+            SelectObject(dc, tick);
+            Polyline(dc, pts, 3);
+            SelectObject(dc, border);
+            DeleteObject(tick);
+        } else if (st & BST_INDETERMINATE) {
+            RECT in = {b.left + box / 4, b.top + box / 4, b.right - box / 4, b.bottom - box / 4};
+            FillRect(dc, &in, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        }
+    }
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(border);
+
+    SetRect(&tr, b.right + MulDiv(5, dpi, 96), rc.top, rc.right, rc.bottom);
+    DrawTextW(dc, text, -1, &tr, dt | DT_VCENTER);
+    if (GetFocus() == h && !(ui & UISF_HIDEFOCUS)) {
+        RECT fr = tr;
+        DrawTextW(dc, text, -1, &fr, dt | DT_CALCRECT);
+        OffsetRect(&fr, 0, (rc.bottom - rc.top - (fr.bottom - fr.top)) / 2);
+        InflateRect(&fr, 1, 1);
+        DrawFocusRect(dc, &fr);
+    }
+    SelectObject(dc, oldFont);
+}
+
+/* Unthemed buttons paint some state changes directly instead of through WM_PAINT, so repaint after those. */
+static LRESULT CALLBACK DarkButtonProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR data)
+{
+    (void)data;
+    switch (m) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        PaintButton(h, dc);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_PRINTCLIENT:
+        PaintButton(h, (HDC)w);
+        return 0;
+    case WM_NCDESTROY:
+        RemoveWindowSubclass(h, DarkButtonProc, id);
+        break;
+    }
+    LRESULT r = DefSubclassProc(h, m, w, l);
+    switch (m) {
+    case WM_MOUSEMOVE:
+        if (GetCapture() != h) break;
+        /* fall through */
+    case BM_SETCHECK: case BM_SETSTATE: case BM_CLICK: case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_KEYDOWN: case WM_KEYUP: case WM_SETFOCUS: case WM_KILLFOCUS: case WM_ENABLE: case WM_SETTEXT:
+    case WM_UPDATEUISTATE: case WM_CAPTURECHANGED:
+        RedrawWindow(h, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+    return r;
+}
+
 static BOOL CALLBACK DarkChild(HWND c, LPARAM l)
 {
     WCHAR cls[32];
@@ -151,8 +263,12 @@ static BOOL CALLBACK DarkChild(HWND c, LPARAM l)
     GetClassNameW(c, cls, 32);
     if (!lstrcmpiW(cls, L"Button")) {
         LONG t = GetWindowLongW(c, GWL_STYLE) & BS_TYPEMASK;
-        if (t == BS_PUSHBUTTON || t == BS_DEFPUSHBUTTON) DarkWindow(c, L"DarkMode_Explorer");
-        else SetWindowTheme(c, L"", L""); /* themed check/radio/group text ignores WM_CTLCOLORSTATIC */
+        if (t == BS_PUSHBUTTON || t == BS_DEFPUSHBUTTON) {
+            DarkWindow(c, L"DarkMode_Explorer");
+        } else if (t != BS_OWNERDRAW) {
+            SetWindowTheme(c, L"", L"");
+            SetWindowSubclass(c, DarkButtonProc, 1, 0);
+        }
     } else if (!lstrcmpiW(cls, L"Edit") || !lstrcmpiW(cls, L"ComboBox")) {
         DarkWindow(c, L"DarkMode_CFD");
     } else if (!lstrcmpiW(cls, L"ListBox") || !lstrcmpiW(cls, L"ComboLBox") || !lstrcmpiW(cls, L"ScrollBar")) {
