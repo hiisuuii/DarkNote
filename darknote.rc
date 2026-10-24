@@ -1,0 +1,96 @@
+#include <windows.h>
+#include "resource.h"
+
+1 24 "darknote.manifest"
+IDI_APP ICON "darknote.ico"
+
+IDM_MAIN MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&New\tCtrl+N", IDM_NEW
+        MENUITEM "New &Window\tCtrl+Shift+N", IDM_NEWWIN
+        MENUITEM "&Open...\tCtrl+O", IDM_OPEN
+        MENUITEM "&Save\tCtrl+S", IDM_SAVE
+        MENUITEM "Save &As...\tCtrl+Shift+S", IDM_SAVEAS
+        MENUITEM SEPARATOR
+        MENUITEM "Page Set&up...", IDM_PAGESETUP
+        MENUITEM "&Print...\tCtrl+P", IDM_PRINT
+        MENUITEM SEPARATOR
+        MENUITEM "E&xit", IDM_EXIT
+    END
+    POPUP "&Edit"
+    BEGIN
+        MENUITEM "&Undo\tCtrl+Z", IDM_UNDO
+        MENUITEM SEPARATOR
+        MENUITEM "Cu&t\tCtrl+X", IDM_CUT
+        MENUITEM "&Copy\tCtrl+C", IDM_COPY
+        MENUITEM "&Paste\tCtrl+V", IDM_PASTE
+        MENUITEM "De&lete\tDel", IDM_DELETE
+        MENUITEM SEPARATOR
+        MENUITEM "&Search with Bing...\tCtrl+E", IDM_BING
+        MENUITEM "&Find...\tCtrl+F", IDM_FIND
+        MENUITEM "Find &Next\tF3", IDM_FINDNEXT
+        MENUITEM "Find Pre&vious\tShift+F3", IDM_FINDPREV
+        MENUITEM "&Replace...\tCtrl+H", IDM_REPLACE
+        MENUITEM "&Go To...\tCtrl+G", IDM_GOTO
+        MENUITEM SEPARATOR
+        MENUITEM "Select &All\tCtrl+A", IDM_SELECTALL
+        MENUITEM "Time/&Date\tF5", IDM_TIMEDATE
+    END
+    POPUP "F&ormat"
+    BEGIN
+        MENUITEM "&Word Wrap", IDM_WRAP
+        MENUITEM "&Font...", IDM_FONT
+    END
+    POPUP "&View"
+    BEGIN
+        POPUP "&Zoom"
+        BEGIN
+            MENUITEM "Zoom &In\tCtrl+Plus", IDM_ZOOMIN
+            MENUITEM "Zoom &Out\tCtrl+Minus", IDM_ZOOMOUT
+            MENUITEM "&Restore Default Zoom\tCtrl+0", IDM_ZOOMRESET
+        END
+        MENUITEM "&Status Bar", IDM_STATUSBAR
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About DarkNote", IDM_ABOUT
+    END
+END
+
+IDA_MAIN ACCELERATORS
+BEGIN
+    "N", IDM_NEW, VIRTKEY, CONTROL
+    "N", IDM_NEWWIN, VIRTKEY, CONTROL, SHIFT
+    "O", IDM_OPEN, VIRTKEY, CONTROL
+    "S", IDM_SAVE, VIRTKEY, CONTROL
+    "S", IDM_SAVEAS, VIRTKEY, CONTROL, SHIFT
+    "P", IDM_PRINT, VIRTKEY, CONTROL
+    "E", IDM_BING, VIRTKEY, CONTROL
+    "F", IDM_FIND, VIRTKEY, CONTROL
+    VK_F3, IDM_FINDNEXT, VIRTKEY
+    VK_F3, IDM_FINDPREV, VIRTKEY, SHIFT
+    "H", IDM_REPLACE, VIRTKEY, CONTROL
+    "G", IDM_GOTO, VIRTKEY, CONTROL
+    "A", IDM_SELECTALL, VIRTKEY, CONTROL
+    VK_F5, IDM_TIMEDATE, VIRTKEY
+    VK_OEM_PLUS, IDM_ZOOMIN, VIRTKEY, CONTROL
+    VK_OEM_PLUS, IDM_ZOOMIN, VIRTKEY, CONTROL, SHIFT
+    VK_ADD, IDM_ZOOMIN, VIRTKEY, CONTROL
+    VK_OEM_MINUS, IDM_ZOOMOUT, VIRTKEY, CONTROL
+    VK_SUBTRACT, IDM_ZOOMOUT, VIRTKEY, CONTROL
+    "0", IDM_ZOOMRESET, VIRTKEY, CONTROL
+    VK_NUMPAD0, IDM_ZOOMRESET, VIRTKEY, CONTROL
+END
+
+IDD_GOTO DIALOGEX 0, 0, 180, 62
+STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Go To Line"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "&Line number:", -1, 7, 7, 166, 9
+    EDITTEXT IDC_LINE, 7, 18, 166, 14, ES_NUMBER | ES_AUTOHSCROLL
+    DEFPUSHBUTTON "Go To", IDOK, 69, 41, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 123, 41, 50, 14
+END

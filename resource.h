@@ -1,0 +1,38 @@
+#define IDI_APP 1
+#define IDM_MAIN 100
+#define IDA_MAIN 101
+#define IDD_GOTO 102
+#define IDC_LINE 103
+
+#define IDM_NEW 200
+#define IDM_NEWWIN 201
+#define IDM_OPEN 202
+#define IDM_SAVE 203
+#define IDM_SAVEAS 204
+#define IDM_PAGESETUP 205
+#define IDM_PRINT 206
+#define IDM_EXIT 207
+
+#define IDM_UNDO 210
+#define IDM_CUT 211
+#define IDM_COPY 212
+#define IDM_PASTE 213
+#define IDM_DELETE 214
+#define IDM_BING 215
+#define IDM_FIND 216
+#define IDM_FINDNEXT 217
+#define IDM_FINDPREV 218
+#define IDM_REPLACE 219
+#define IDM_GOTO 220
+#define IDM_SELECTALL 221
+#define IDM_TIMEDATE 222
+
+#define IDM_WRAP 230
+#define IDM_FONT 231
+
+#define IDM_ZOOMIN 240
+#define IDM_ZOOMOUT 241
+#define IDM_ZOOMRESET 242
+#define IDM_STATUSBAR 243
+
+#define IDM_ABOUT 250
