@@ -5,7 +5,30 @@
 #include <dlgs.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <uxtheme.h>
+#include <dwmapi.h>
 #include "resource.h"
+
+#define COL_BG RGB(30, 30, 30)
+#define COL_TEXT RGB(220, 220, 220)
+#define COL_PANEL RGB(43, 43, 43)
+#define COL_HOT RGB(65, 65, 65)
+#define COL_DISABLED RGB(120, 120, 120)
+#define COL_DLG RGB(32, 32, 32)
+#define COL_INPUT RGB(45, 45, 45)
+#define COL_SEP RGB(70, 70, 70)
+
+/* Undocumented menu bar drawing messages; the only way to theme the menu bar itself. */
+#define WM_UAHDRAWMENU 0x0091
+#define WM_UAHDRAWMENUITEM 0x0092
+typedef struct { HMENU hmenu; HDC hdc; DWORD dwFlags; } UAHMENU;
+typedef struct { DWORD rgcx[4]; DWORD fUpdateMaxWidths : 2; } UAHMENUPOPUPMETRICS;
+typedef union {
+    struct { DWORD cx, cy; } rgsizeBar[2];
+    struct { DWORD cx, cy; } rgsizePopup[4];
+} UAHMENUITEMMETRICS;
+typedef struct { int iPosition; UAHMENUITEMMETRICS umim; UAHMENUPOPUPMETRICS umpm; } UAHMENUITEM;
+typedef struct { DRAWITEMSTRUCT dis; UAHMENU um; UAHMENUITEM umi; } UAHDRAWMENUITEM;
 
 /* comctl32 v6 edit control extensions, missing from the MinGW headers */
 #ifndef EM_SETEXTENDEDSTYLE
@@ -56,6 +79,10 @@ static WCHAR g_header[HF_MAX] = L"&f", g_footer[HF_MAX] = L"Page &p";
 static WCHAR g_hfTmp[2][HF_MAX];
 static HGLOBAL g_devMode, g_devNames;
 static int g_sLine = -1, g_sCol = -1, g_sZoom = -1;
+static HBRUSH g_brBg, g_brPanel, g_brHot, g_brDlg, g_brInput, g_brSep;
+static HFONT g_menuFont, g_statusFont;
+static WNDPROC g_statusProc;
+static BOOL (WINAPI *g_allowDarkWnd)(HWND, BOOL);
 
 static void *Alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), 0, n); }
 static void Free(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
@@ -77,6 +104,185 @@ static void ErrorBox(const WCHAR *path, DWORD err)
     if (!FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err, 0, sys, 512, NULL))
         wsprintfW(sys, L"Error %lu", err);
     Msg(NULL, MB_ICONERROR, L"%s\n\n%s", path, sys);
+}
+
+
+/* uxtheme ordinals 133/135/136 (AllowDarkModeForWindow, SetPreferredAppMode, FlushMenuThemes) exist
+   from Windows 10 1809 on; they make popup menus, scrollbars and buttons draw dark. */
+static void InitDarkMode(void)
+{
+    DWORD maj, min, build = 0;
+    void (WINAPI *ver)(DWORD *, DWORD *, DWORD *) =
+        (void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetNtVersionNumbers");
+    if (ver) ver(&maj, &min, &build);
+    g_brBg = CreateSolidBrush(COL_BG);
+    g_brPanel = CreateSolidBrush(COL_PANEL);
+    g_brHot = CreateSolidBrush(COL_HOT);
+    g_brDlg = CreateSolidBrush(COL_DLG);
+    g_brInput = CreateSolidBrush(COL_INPUT);
+    g_brSep = CreateSolidBrush(COL_SEP);
+    if ((build & 0x0FFFFFFF) < 17763) return;
+    HMODULE ux = LoadLibraryExW(L"uxtheme.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!ux) return;
+    int (WINAPI *setMode)(int) = (void *)GetProcAddress(ux, MAKEINTRESOURCEA(135));
+    void (WINAPI *flush)(void) = (void *)GetProcAddress(ux, MAKEINTRESOURCEA(136));
+    g_allowDarkWnd = (void *)GetProcAddress(ux, MAKEINTRESOURCEA(133));
+    if (setMode) setMode(2);
+    if (flush) flush();
+}
+
+static void DarkWindow(HWND h, const WCHAR *theme)
+{
+    if (g_allowDarkWnd) g_allowDarkWnd(h, TRUE);
+    if (theme) SetWindowTheme(h, theme, NULL);
+}
+
+static void DarkTitle(HWND h)
+{
+    BOOL on = TRUE;
+    if (FAILED(DwmSetWindowAttribute(h, DWMWA_USE_IMMERSIVE_DARK_MODE, &on, sizeof on)))
+        DwmSetWindowAttribute(h, 19, &on, sizeof on);
+}
+
+static BOOL CALLBACK DarkChild(HWND c, LPARAM l)
+{
+    WCHAR cls[32];
+    (void)l;
+    GetClassNameW(c, cls, 32);
+    if (!lstrcmpiW(cls, L"Button")) {
+        LONG t = GetWindowLongW(c, GWL_STYLE) & BS_TYPEMASK;
+        if (t == BS_PUSHBUTTON || t == BS_DEFPUSHBUTTON) DarkWindow(c, L"DarkMode_Explorer");
+        else SetWindowTheme(c, L"", L""); /* themed check/radio/group text ignores WM_CTLCOLORSTATIC */
+    } else if (!lstrcmpiW(cls, L"Edit") || !lstrcmpiW(cls, L"ComboBox")) {
+        DarkWindow(c, L"DarkMode_CFD");
+    } else if (!lstrcmpiW(cls, L"ListBox") || !lstrcmpiW(cls, L"ComboLBox") || !lstrcmpiW(cls, L"ScrollBar")) {
+        DarkWindow(c, L"DarkMode_Explorer");
+    }
+    SendMessageW(c, WM_THEMECHANGED, 0, 0);
+    return TRUE;
+}
+
+static void DarkDialog(HWND d)
+{
+    DarkWindow(d, NULL);
+    DarkTitle(d);
+    EnumChildWindows(d, DarkChild, 0);
+}
+
+static INT_PTR DarkCtlColor(UINT m, WPARAM w)
+{
+    HDC dc = (HDC)w;
+    switch (m) {
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        SetTextColor(dc, COL_TEXT);
+        SetBkColor(dc, COL_INPUT);
+        return (INT_PTR)g_brInput;
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        SetTextColor(dc, COL_TEXT);
+        SetBkColor(dc, COL_DLG);
+        return (INT_PTR)g_brDlg;
+    }
+    return 0;
+}
+
+static UINT_PTR CALLBACK DarkHook(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    (void)l;
+    if (m == WM_INITDIALOG) {
+        DarkDialog(h);
+        return TRUE;
+    }
+    return DarkCtlColor(m, w);
+}
+
+static void UpdateUiFonts(void)
+{
+    NONCLIENTMETRICSW ncm = {sizeof ncm};
+    if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0, GetDpiForWindow(g_wnd))) return;
+    if (g_menuFont) DeleteObject(g_menuFont);
+    if (g_statusFont) DeleteObject(g_statusFont);
+    g_menuFont = CreateFontIndirectW(&ncm.lfMenuFont);
+    g_statusFont = CreateFontIndirectW(&ncm.lfStatusFont);
+    if (g_status) SendMessageW(g_status, WM_SETFONT, (WPARAM)g_statusFont, TRUE);
+}
+
+static void DrawMenuBar_(UAHMENU *um)
+{
+    MENUBARINFO mbi = {sizeof mbi};
+    RECT wr;
+    GetMenuBarInfo(g_wnd, OBJID_MENU, 0, &mbi);
+    GetWindowRect(g_wnd, &wr);
+    OffsetRect(&mbi.rcBar, -wr.left, -wr.top);
+    FillRect(um->hdc, &mbi.rcBar, g_brPanel);
+}
+
+static void DrawMenuBarItem(UAHDRAWMENUITEM *mi)
+{
+    WCHAR buf[64];
+    MENUITEMINFOW mii = {sizeof mii};
+    UINT st = mi->dis.itemState;
+    DWORD dt = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
+    mii.fMask = MIIM_STRING;
+    mii.dwTypeData = buf;
+    mii.cch = 63;
+    if (!GetMenuItemInfoW(mi->um.hmenu, mi->umi.iPosition, TRUE, &mii)) buf[0] = 0;
+    if (st & ODS_NOACCEL) dt |= DT_HIDEPREFIX;
+    FillRect(mi->um.hdc, &mi->dis.rcItem, (st & (ODS_HOTLIGHT | ODS_SELECTED)) ? g_brHot : g_brPanel);
+    HGDIOBJ old = SelectObject(mi->um.hdc, g_menuFont);
+    SetBkMode(mi->um.hdc, TRANSPARENT);
+    SetTextColor(mi->um.hdc, (st & (ODS_GRAYED | ODS_DISABLED | ODS_INACTIVE)) ? COL_DISABLED : COL_TEXT);
+    DrawTextW(mi->um.hdc, buf, -1, &mi->dis.rcItem, dt);
+    SelectObject(mi->um.hdc, old);
+}
+
+/* Windows draws a 1px light line between the menu bar and the client area; paint over it. */
+static void CoverMenuLine(void)
+{
+    RECT cr, wr;
+    GetClientRect(g_wnd, &cr);
+    MapWindowPoints(g_wnd, NULL, (POINT *)&cr, 2);
+    GetWindowRect(g_wnd, &wr);
+    OffsetRect(&cr, -wr.left, -wr.top);
+    cr.bottom = cr.top;
+    cr.top--;
+    HDC dc = GetWindowDC(g_wnd);
+    FillRect(dc, &cr, g_brPanel);
+    ReleaseDC(g_wnd, dc);
+}
+
+static LRESULT CALLBACK StatusProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_ERASEBKGND) return 1;
+    if (m == WM_PAINT) {
+        PAINTSTRUCT ps;
+        RECT rc, r;
+        WCHAR buf[64];
+        HDC dc = BeginPaint(h, &ps);
+        GetClientRect(h, &rc);
+        FillRect(dc, &rc, g_brPanel);
+        HGDIOBJ old = SelectObject(dc, g_statusFont ? (HGDIOBJ)g_statusFont : GetStockObject(DEFAULT_GUI_FONT));
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, COL_TEXT);
+        int n = (int)SendMessageW(h, SB_GETPARTS, 0, 0);
+        for (int i = 0; i < n; i++) {
+            SendMessageW(h, SB_GETRECT, i, (LPARAM)&r);
+            if (i > 0) {
+                RECT sep = {r.left - 1, rc.top + 3, r.left, rc.bottom - 3};
+                FillRect(dc, &sep, g_brSep);
+            }
+            buf[0] = 0;
+            if (LOWORD(SendMessageW(h, SB_GETTEXTLENGTHW, i, 0)) < 64) SendMessageW(h, SB_GETTEXTW, i, (LPARAM)buf);
+            r.left += 2;
+            DrawTextW(dc, buf, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        }
+        SelectObject(dc, old);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    return CallWindowProcW(g_statusProc, h, m, w, l);
 }
 
 static WCHAR *GetEditText(int *len)
@@ -260,6 +466,7 @@ static void CreateEditor(void)
     DWORD style = WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_NOHIDESEL;
     if (!g_wrap) style |= WS_HSCROLL | ES_AUTOHSCROLL;
     g_edit = CreateWindowExW(0, L"EDIT", NULL, style, 0, 0, 0, 0, g_wnd, (HMENU)ID_EDIT, g_inst, NULL);
+    DarkWindow(g_edit, L"DarkMode_Explorer");
     Ed(EM_SETLIMITTEXT, 0, 0);
     DWORD ex = ES_EX_ALLOWEOL_ALL_ | ES_EX_CONVERT_EOL_ON_PASTE_ | ES_EX_ZOOMABLE_;
     Ed(EM_SETEXTENDEDSTYLE, ex, ex);
@@ -303,7 +510,6 @@ static const WCHAR *EolStr(void)
     return g_eol == EOL_LF ? L"\n" : g_eol == EOL_CR ? L"\r" : L"\r\n";
 }
 
-/* ---------- file I/O ---------- */
 
 static WCHAR *Decode(BYTE *b, DWORD n, int force, int *enc, int *outLen)
 {
@@ -608,7 +814,6 @@ static void OpenFromCommandLine(void)
     LoadFile(full, ENC_AUTO);
 }
 
-/* ---------- find / replace ---------- */
 
 static UINT_PTR CALLBACK FindHook(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -628,11 +833,12 @@ static UINT_PTR CALLBACK FindHook(HWND h, UINT m, WPARAM w, LPARAM l)
         SendMessageW(wrap, WM_SETFONT, SendMessageW(h, WM_GETFONT, 0, 0), FALSE);
         SetWindowPos(wrap, c2, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         CheckDlgButton(h, IDC_WRAPAROUND, g_wrapAround ? BST_CHECKED : BST_UNCHECKED);
+        DarkDialog(h);
         return TRUE;
     }
     if (m == WM_COMMAND && LOWORD(w) == IDC_WRAPAROUND)
         g_wrapAround = IsDlgButtonChecked(h, IDC_WRAPAROUND) == BST_CHECKED;
-    return FALSE;
+    return DarkCtlColor(m, w);
 }
 
 static void OpenFind(BOOL replace)
@@ -750,13 +956,13 @@ static void OnFindMsg(FINDREPLACEW *fr)
     else if (fr->Flags & FR_REPLACEALL) DoReplaceAll();
 }
 
-/* ---------- go to ---------- */
 
 static INT_PTR CALLBACK GotoProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_INITDIALOG) {
         SetDlgItemInt(h, IDC_LINE, (UINT)l, FALSE);
         SendDlgItemMessageW(h, IDC_LINE, EM_SETSEL, 0, -1);
+        DarkDialog(h);
         return TRUE;
     }
     if (m == WM_COMMAND) {
@@ -778,7 +984,7 @@ static INT_PTR CALLBACK GotoProc(HWND h, UINT m, WPARAM w, LPARAM l)
             return TRUE;
         }
     }
-    return FALSE;
+    return DarkCtlColor(m, w);
 }
 
 static void GoTo(void)
@@ -793,7 +999,6 @@ static void GoTo(void)
     }
 }
 
-/* ---------- font ---------- */
 
 static void ChooseEditorFont(void)
 {
@@ -804,7 +1009,8 @@ static void ChooseEditorFont(void)
     ReleaseDC(NULL, dc);
     cf.hwndOwner = g_wnd;
     cf.lpLogFont = &lf;
-    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOVERTFONTS;
+    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOVERTFONTS | CF_ENABLEHOOK;
+    cf.lpfnHook = DarkHook;
     if (!ChooseFontW(&cf)) return;
     g_lf = lf;
     g_fontPt10 = cf.iPointSize ? cf.iPointSize : 110;
@@ -812,7 +1018,6 @@ static void ChooseEditorFont(void)
     UpdateStatus();
 }
 
-/* ---------- page setup / print ---------- */
 
 typedef struct { int top, delta; HWND dlg; } MoveCtx;
 
@@ -855,13 +1060,14 @@ static UINT_PTR CALLBACK PageHook(HWND h, UINT m, WPARAM w, LPARAM l)
             SendMessageW(ed, WM_SETFONT, (WPARAM)font, FALSE);
             SendMessageW(ed, EM_SETLIMITTEXT, HF_MAX - 1, 0);
         }
+        DarkDialog(h);
         return TRUE;
     }
     if (m == WM_COMMAND && LOWORD(w) == IDOK) {
         GetDlgItemTextW(h, IDC_HEADER, g_hfTmp[0], HF_MAX);
         GetDlgItemTextW(h, IDC_FOOTER, g_hfTmp[1], HF_MAX);
     }
-    return FALSE;
+    return DarkCtlColor(m, w);
 }
 
 static void PageSetup(void)
@@ -1045,7 +1251,6 @@ static void Print(void)
     if (pd.hDC) DeleteDC(pd.hDC);
 }
 
-/* ---------- misc commands ---------- */
 
 static void SearchBing(void)
 {
@@ -1162,7 +1367,6 @@ static void OnCommand(int id)
     }
 }
 
-/* ---------- settings ---------- */
 
 static DWORD RegDword(HKEY k, const WCHAR *name, DWORD def)
 {
@@ -1244,7 +1448,6 @@ static void SaveSettings(void)
     RegCloseKey(k);
 }
 
-/* ---------- main window ---------- */
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -1253,6 +1456,22 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     switch (m) {
+    case WM_CTLCOLOREDIT:
+        SetTextColor((HDC)w, COL_TEXT);
+        SetBkColor((HDC)w, COL_BG);
+        return (LRESULT)g_brBg;
+    case WM_UAHDRAWMENU:
+        DrawMenuBar_((UAHMENU *)l);
+        return TRUE;
+    case WM_UAHDRAWMENUITEM:
+        DrawMenuBarItem((UAHDRAWMENUITEM *)l);
+        return TRUE;
+    case WM_NCPAINT:
+    case WM_NCACTIVATE: {
+        LRESULT r = DefWindowProcW(h, m, w, l);
+        CoverMenuLine();
+        return r;
+    }
     case WM_COMMAND:
         if (LOWORD(w) == ID_EDIT) {
             if (HIWORD(w) == EN_CHANGE) UpdateTitle();
@@ -1274,6 +1493,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_DPICHANGED: {
         RECT *r = (RECT *)l;
         SetWindowPos(h, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        UpdateUiFonts();
         ApplyFont();
         Layout();
         return 0;
@@ -1312,12 +1532,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     MSG msg;
     g_inst = inst;
     InitCommonControlsEx(&icc);
+    InitDarkMode();
     LoadSettings();
 
     wc.lpfnWndProc = WndProc;
     wc.hInstance = inst;
     wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(IDI_APP));
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    wc.hbrBackground = g_brBg;
     wc.lpszMenuName = MAKEINTRESOURCEW(IDM_MAIN);
     wc.lpszClassName = APP;
     RegisterClassExW(&wc);
@@ -1325,9 +1547,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     BOOL hasPos = g_winRect.right > 0 && g_winRect.bottom > 0;
     g_wnd = CreateWindowExW(WS_EX_ACCEPTFILES, APP, APP, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                             CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, inst, NULL);
+    DarkWindow(g_wnd, NULL);
+    DarkTitle(g_wnd);
     CreateEditor();
     g_status = CreateWindowExW(0, STATUSCLASSNAMEW, NULL, WS_CHILD | SBARS_SIZEGRIP | (g_statusOn ? WS_VISIBLE : 0),
                                0, 0, 0, 0, g_wnd, (HMENU)ID_STATUS, inst, NULL);
+    g_statusProc = (WNDPROC)SetWindowLongPtrW(g_status, GWLP_WNDPROC, (LONG_PTR)StatusProc);
+    UpdateUiFonts();
     Layout();
     ApplyFont();
     g_findMsg = RegisterWindowMessageW(FINDMSGSTRINGW);
