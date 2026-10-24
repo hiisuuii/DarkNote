@@ -1,3 +1,6 @@
 *.exe
 *.o
 *.res
+*.msi
+*.wixpdb
+installer/obj/
