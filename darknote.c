@@ -88,6 +88,16 @@ static void *Alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), 0, n); }
 static void Free(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 static LRESULT Ed(UINT m, WPARAM w, LPARAM l) { return SendMessageW(g_edit, m, w, l); }
 
+typedef struct {
+    const WCHAR *title, *text;
+    UINT icon;
+    int n;
+    const WCHAR *const *labels;
+    const int *ids;
+} MsgSpec;
+
+static int DarkMsgBox(HWND owner, const MsgSpec *spec);
+
 static int Msg(HWND owner, UINT flags, const WCHAR *fmt, ...)
 {
     WCHAR buf[1100];
@@ -95,7 +105,20 @@ static int Msg(HWND owner, UINT flags, const WCHAR *fmt, ...)
     va_start(ap, fmt);
     wvsprintfW(buf, fmt, ap);
     va_end(ap);
-    return MessageBoxW(owner ? owner : g_wnd, buf, APP, flags);
+    static const WCHAR *const okL[] = {L"OK"}, *const okCancelL[] = {L"OK", L"Cancel"},
+                              *const yncL[] = {L"&Yes", L"&No", L"Cancel"};
+    static const int okI[] = {IDOK}, okCancelI[] = {IDOK, IDCANCEL}, yncI[] = {IDYES, IDNO, IDCANCEL};
+    MsgSpec spec = {APP, buf, flags & MB_ICONMASK, 1, okL, okI};
+    if ((flags & MB_TYPEMASK) == MB_OKCANCEL) {
+        spec.n = 2;
+        spec.labels = okCancelL;
+        spec.ids = okCancelI;
+    } else if ((flags & MB_TYPEMASK) == MB_YESNOCANCEL) {
+        spec.n = 3;
+        spec.labels = yncL;
+        spec.ids = yncI;
+    }
+    return DarkMsgBox(owner ? owner : g_wnd, &spec);
 }
 
 static void ErrorBox(const WCHAR *path, DWORD err)
@@ -399,6 +422,133 @@ static LRESULT CALLBACK StatusProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     }
     return CallWindowProcW(g_statusProc, h, m, w, l);
+}
+
+static INT_PTR CALLBACK MsgProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    const MsgSpec *spec = (const MsgSpec *)GetWindowLongPtrW(h, DWLP_USER);
+    switch (m) {
+    case WM_INITDIALOG: {
+        spec = (const MsgSpec *)l;
+        SetWindowLongPtrW(h, DWLP_USER, l);
+        int dpi = GetDpiForWindow(h);
+#define S(x) MulDiv(x, dpi, 96)
+        int margin = S(24), iconSz = 0, gap = S(12), bh = S(26), bandH = bh + S(24);
+        HWND text = GetDlgItem(h, IDC_MSGTEXT), icon = GetDlgItem(h, IDC_MSGICON);
+        HDC dc = GetDC(h);
+        HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageW(h, WM_GETFONT, 0, 0));
+        RECT tr = {0, 0, S(420), 0};
+        DrawTextW(dc, spec->text, -1, &tr, DT_CALCRECT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+
+        LPCWSTR sysIcon = NULL;
+        switch (spec->icon) {
+        case MB_ICONERROR: sysIcon = IDI_ERROR; break;
+        case MB_ICONWARNING: sysIcon = IDI_WARNING; break;
+        case MB_ICONINFORMATION: sysIcon = IDI_INFORMATION; break;
+        case MB_ICONQUESTION: sysIcon = IDI_QUESTION; break;
+        }
+        HICON hi = NULL;
+        if (sysIcon && SUCCEEDED(LoadIconWithScaleDown(NULL, sysIcon, S(32), S(32), &hi))) {
+            iconSz = S(32);
+            SendMessageW(icon, STM_SETICON, (WPARAM)hi, 0);
+        } else {
+            ShowWindow(icon, SW_HIDE);
+        }
+
+        int bw[3] = {0, 0, 0}, buttonsW = 0;
+        for (int i = 0; i < 3; i++) {
+            HWND b = GetDlgItem(h, IDC_B1 + i);
+            if (i >= spec->n) {
+                ShowWindow(b, SW_HIDE);
+                continue;
+            }
+            RECT br = {0, 0, 0, 0};
+            DrawTextW(dc, spec->labels[i], -1, &br, DT_CALCRECT | DT_SINGLELINE);
+            bw[i] = br.right + S(24) > S(88) ? br.right + S(24) : S(88);
+            buttonsW += bw[i] + (i ? S(10) : 0);
+            SetWindowTextW(b, spec->labels[i]);
+        }
+        SelectObject(dc, old);
+        ReleaseDC(h, dc);
+
+        int textX = margin + (iconSz ? iconSz + gap : 0);
+        int contentW = textX + tr.right + margin, minW = buttonsW + 2 * S(12);
+        int cw = contentW > minW ? contentW : minW;
+        if (cw < S(280)) cw = S(280);
+        int bodyH = (tr.bottom > iconSz ? tr.bottom : iconSz) + 2 * margin;
+        int ch = bodyH + bandH;
+
+        MoveWindow(icon, margin, margin, iconSz, iconSz, FALSE);
+        MoveWindow(text, textX, margin + (iconSz > tr.bottom ? (iconSz - tr.bottom) / 2 : 0), tr.right, tr.bottom, FALSE);
+        SetWindowTextW(text, spec->text);
+        int x = cw - S(12) - buttonsW;
+        for (int i = 0; i < spec->n; i++) {
+            MoveWindow(GetDlgItem(h, IDC_B1 + i), x, bodyH + (bandH - bh) / 2, bw[i], bh, FALSE);
+            x += bw[i] + S(10);
+        }
+#undef S
+
+        RECT wr = {0, 0, cw, ch}, ref;
+        AdjustWindowRectExForDpi(&wr, GetWindowLongW(h, GWL_STYLE), FALSE, GetWindowLongW(h, GWL_EXSTYLE), dpi);
+        HWND owner = GetWindow(h, GW_OWNER);
+        if (owner && IsWindowVisible(owner) && !IsIconic(owner)) {
+            GetWindowRect(owner, &ref);
+        } else {
+            MONITORINFO mi = {sizeof mi};
+            GetMonitorInfoW(MonitorFromWindow(owner ? owner : h, MONITOR_DEFAULTTONEAREST), &mi);
+            ref = mi.rcWork;
+        }
+        int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
+        SetWindowPos(h, NULL, (ref.left + ref.right - ww) / 2, (ref.top + ref.bottom - wh) / 2, ww, wh, SWP_NOZORDER);
+        SetWindowTextW(h, spec->title);
+        SendMessageW(h, DM_SETDEFID, IDC_B1, 0);
+        DarkDialog(h);
+        SetFocus(GetDlgItem(h, IDC_B1));
+        return FALSE;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        RECT rc, b;
+        HDC dc = BeginPaint(h, &ps);
+        GetClientRect(h, &rc);
+        GetWindowRect(GetDlgItem(h, IDC_B1), &b);
+        MapWindowPoints(NULL, h, (POINT *)&b, 2);
+        rc.top = b.top - (rc.bottom - b.bottom);
+        FillRect(dc, &rc, g_brPanel);
+        EndPaint(h, &ps);
+        return TRUE;
+    }
+    case WM_COMMAND: {
+        int id = LOWORD(w);
+        if (id >= IDC_B1 && id < IDC_B1 + spec->n) {
+            EndDialog(h, spec->ids[id - IDC_B1]);
+            return TRUE;
+        }
+        if (id == IDCANCEL) {
+            /* Esc and the close box mean Cancel, or the only button when there is no Cancel. */
+            for (int i = 0; i < spec->n; i++)
+                if (spec->ids[i] == IDCANCEL) {
+                    EndDialog(h, IDCANCEL);
+                    return TRUE;
+                }
+            if (spec->n == 1) EndDialog(h, spec->ids[0]);
+            return TRUE;
+        }
+        break;
+    }
+    case WM_DESTROY: {
+        HICON hi = (HICON)SendDlgItemMessageW(h, IDC_MSGICON, STM_GETICON, 0, 0);
+        if (hi) DestroyIcon(hi);
+        break;
+    }
+    }
+    return DarkCtlColor(m, w);
+}
+
+static int DarkMsgBox(HWND owner, const MsgSpec *spec)
+{
+    if (spec->icon) MessageBeep(spec->icon);
+    return (int)DialogBoxParamW(g_inst, MAKEINTRESOURCEW(IDD_MSG), owner, MsgProc, (LPARAM)spec);
 }
 
 static WCHAR *GetEditText(int *len)
@@ -847,21 +997,13 @@ static BOOL Save(void)
 
 static BOOL CheckSave(void)
 {
+    static const WCHAR *const labels[] = {L"&Save", L"Do&n't Save", L"Cancel"};
+    static const int ids[] = {IDYES, IDNO, IDCANCEL};
     WCHAR text[PATH_MAX_ + 64];
-    int btn = IDCANCEL;
-    TASKDIALOG_BUTTON btns[] = {{IDYES, L"&Save"}, {IDNO, L"Do&n't Save"}};
-    TASKDIALOGCONFIG tc = {sizeof tc};
     if (!Ed(EM_GETMODIFY, 0, 0)) return TRUE;
     wsprintfW(text, L"Do you want to save changes to %s?", g_path[0] ? g_path : L"Untitled");
-    tc.hwndParent = g_wnd;
-    tc.hInstance = g_inst;
-    tc.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
-    tc.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    tc.pszWindowTitle = APP;
-    tc.pszMainInstruction = text;
-    tc.pButtons = btns;
-    tc.cButtons = 2;
-    TaskDialogIndirect(&tc, &btn, NULL, NULL);
+    MsgSpec spec = {APP, text, 0, 3, labels, ids};
+    int btn = DarkMsgBox(g_wnd, &spec);
     if (btn == IDYES) return Save();
     return btn == IDNO;
 }
@@ -1087,7 +1229,10 @@ static INT_PTR CALLBACK GotoProc(HWND h, UINT m, WPARAM w, LPARAM l)
             UINT n = GetDlgItemInt(h, IDC_LINE, &ok, FALSE);
             UINT count = (UINT)Ed(EM_GETFILELINECOUNT_, 0, 0);
             if (!ok || n < 1 || n > count) {
-                MessageBoxW(h, L"The line number is beyond the total number of lines", L"DarkNote - Goto Line", MB_OK);
+                static const WCHAR *const okL[] = {L"OK"};
+                static const int okI[] = {IDOK};
+                MsgSpec spec = {L"DarkNote - Goto Line", L"The line number is beyond the total number of lines", 0, 1, okL, okI};
+                DarkMsgBox(h, &spec);
                 SetFocus(GetDlgItem(h, IDC_LINE));
                 SendDlgItemMessageW(h, IDC_LINE, EM_SETSEL, 0, -1);
                 return TRUE;

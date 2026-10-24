@@ -36,3 +36,8 @@
 #define IDM_STATUSBAR 243
 
 #define IDM_ABOUT 250
+
+#define IDD_MSG 104
+#define IDC_MSGICON 105
+#define IDC_MSGTEXT 106
+#define IDC_B1 107
