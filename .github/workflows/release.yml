@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $p = @("${{ github.ref_name }}".TrimStart('v').Split('.') | Select-Object -First 3)
+          while ($p.Count -lt 3) { $p += '0' }
+          $v = $p -join '.'
+          "#define VER_COMMA $($p -join ','),0`n#define VER_STR `"$v.0`"" | Set-Content version.h -Encoding ascii
+          Get-Content version.h
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.0
+          wix extension add -g WixToolset.UI.wixext/6.0.0
+
+      - name: Build exe
+        shell: cmd
+        run: |
+          gcc --version
+          build.bat
+
+      - name: Build installer
+        shell: cmd
+        run: installer\build.bat
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarkNote
+          path: |
+            DarkNote.exe
+            installer/DarkNote-Setup.msi
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" DarkNote.exe installer/DarkNote-Setup.msi --title "DarkNote ${{ github.ref_name }}" --generate-notes

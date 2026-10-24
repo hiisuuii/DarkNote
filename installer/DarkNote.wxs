@@ -1,5 +1,5 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="DarkNote" Manufacturer="DarkNote" Version="1.0.0.0" Scope="perUser"
+  <Package Name="DarkNote" Manufacturer="DarkNote" Version="!(bind.FileVersion.DarkNoteExe)" Scope="perUser"
            UpgradeCode="11f2f0d3-3311-4c66-a6e7-ba1c298bc48a">
     <MajorUpgrade DowngradeErrorMessage="A newer version of DarkNote is already installed." />
     <MediaTemplate EmbedCab="yes" />

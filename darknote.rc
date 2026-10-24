@@ -1,5 +1,6 @@
 #include <windows.h>
 #include "resource.h"
+#include "version.h"
 
 1 24 "darknote.manifest"
 IDI_APP ICON "darknote.ico"
@@ -107,8 +108,8 @@ BEGIN
 END
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1,0,0,0
-PRODUCTVERSION 1,0,0,0
+FILEVERSION VER_COMMA
+PRODUCTVERSION VER_COMMA
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -117,9 +118,9 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "FileDescription", "DarkNote"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", VER_STR
             VALUE "ProductName", "DarkNote"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", VER_STR
             VALUE "OriginalFilename", "DarkNote.exe"
         END
     END
